@@ -1,0 +1,35 @@
+.env
+.env.*
+!.env.example
+
+.venv/
+venv/
+env/
+__pycache__/
+*.py[cod]
+
+.pytest_cache/
+.coverage
+htmlcov/
+
+*.log
+logs/
+
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+
+# SQLite databases and temporary database files
+*.db
+*.sqlite
+*.sqlite3
+*.db-wal
+*.db-shm
+*.sqlite-wal
+*.sqlite-shm
+
+# Database backups
+*.bak
+*.backup
+*.db.backup

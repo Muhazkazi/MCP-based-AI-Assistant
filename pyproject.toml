@@ -1,0 +1,32 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "mcp-database-assistant"
+version = "0.1.0"
+description = "A terminal AI database assistant demonstrating MCP with SQLite."
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "mcp[cli]>=2.2.0,<3",
+    "groq>=1.7.0,<2",
+    "python-dotenv>=1.0.1",
+    "streamlit>=1.44.0,<2",
+    "plotly>=5.18.0,<7",
+]
+
+[project.optional-dependencies]
+test = ["pytest>=8.0"]
+
+[project.scripts]
+mcp-database-assistant = "mcp_database_assistant.app:main"
+mcp-database-server = "mcp_database_assistant.server:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]
+

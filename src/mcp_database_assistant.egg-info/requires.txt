@@ -1,0 +1,8 @@
+mcp[cli]<3,>=2.2.0
+groq<2,>=1.7.0
+python-dotenv>=1.0.1
+streamlit<2,>=1.44.0
+plotly<7,>=5.18.0
+
+[test]
+pytest>=8.0

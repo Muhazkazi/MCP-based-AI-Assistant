@@ -1,0 +1,181 @@
+# MCP-Based AI Database Assistant
+
+This project is a terminal chat assistant for a real SQLite student database. The user speaks in natural language; an LLM chooses a typed MCP database tool; the MCP server validates the request and performs the database operation. The LLM never opens SQLite directly.
+
+## What MCP does here
+
+The Model Context Protocol (MCP) is a standard way for an AI application to discover and call tools supplied by another process. It is useful here because the database server owns the data boundary while the LLM only receives safe tool schemas and tool results.
+
+```text
+User
+  |
+  v
+Groq LLM (OpenAI-compatible API)
+  |
+  v
+MCP client (stdio)
+  |
+  v
+MCP database server (typed tools + validation)
+  |
+  v
+SQLite: data/students.db
+```
+
+The current official MCP Python SDK 2.x calls the decorator-based server class `MCPServer` (the older SDK called it `FastMCP`). This project uses the current API and its `@mcp.tool()` interface.
+
+## Project structure
+
+```text
+data/students.db                         Delivered demo database
+src/mcp_database_assistant/database.py   SQLite connection and schema
+src/mcp_database_assistant/db_tools.py   Validated database operations
+src/mcp_database_assistant/server.py     MCP server and tool definitions
+src/mcp_database_assistant/mcp_client.py MCP stdio client
+src/mcp_database_assistant/llm.py        LLM tool-calling loop
+src/mcp_database_assistant/app.py        Terminal chat UI
+src/mcp_database_assistant/web_app.py    Streamlit dashboard and web chat
+src/mcp_database_assistant/analytics.py  Pure chart-data helpers
+src/mcp_database_assistant/charting.py   Chart specification validation and Plotly rendering
+tests/                                    Temporary-database tests
+```
+
+There is no startup seed routine. The delivered database is an explicitly initialized sample college database. Tests create temporary databases, so they do not modify the demo database.
+
+## Installation
+
+Python 3.10 or newer is required. From the project directory:
+
+```powershell
+py -m venv .venv
+.\.venv\Scripts\Activate.ps1
+python -m pip install --upgrade pip
+python -m pip install -e ".[test]"
+```
+
+`uv` is also supported:
+
+```powershell
+uv sync
+```
+
+## Configure the LLM
+
+Copy `.env.example` to `.env` and set an API key:
+
+```powershell
+Copy-Item .env.example .env
+```
+
+Set `GROQ_API_KEY` in `.env`. The default model is `openai/gpt-oss-20b`, which is currently available to this Groq account and supports tool use. You can override it with `GROQ_MODEL` when selecting another currently supported Groq tool-calling model. The Groq SDK base URL is `https://api.groq.com`; the SDK appends `/openai/v1/chat/completions`, producing the final endpoint `https://api.groq.com/openai/v1/chat/completions` exactly once.
+
+The normal application requires the LLM key. It does not silently fall back to a non-LLM database path.
+
+## College database and migration
+
+The existing `students` table is migrated in place, preserving its original rows and columns while adding expanded student fields. The schema now includes `students`, `teachers`, `departments`, `courses`, `enrollments`, `exams`, `results`, `classrooms`, `timetable`, `attendance`, `fees`, `library_books`, and `library_transactions`, with foreign keys and indexes for common lookups.
+
+Database migration never inserts demonstration rows:
+
+```powershell
+python -m mcp_database_assistant.database --migrate
+```
+
+The delivered sample data can be initialized or completed explicitly and safely rerun:
+
+```powershell
+python -m mcp_database_assistant.database --seed-demo
+```
+
+The sample dataset targets 100 students, 20 teachers, 6 departments, 30 courses, 300 enrollments, 100 exams, results, attendance, fees, classrooms, books, and library transactions. It is clearly demonstration data, not real college records.
+
+## Run the application
+
+With the virtual environment active:
+
+```powershell
+python -m mcp_database_assistant.app
+```
+
+The application starts the MCP server as a local stdio subprocess. You only type natural-language requests at the `You:` prompt. Type `quit` or `exit` to stop.
+
+To start the MCP server by itself for a manual stdio connection:
+
+```powershell
+python -m mcp_database_assistant.server
+```
+
+The server speaks MCP on stdin/stdout, so it intentionally does not print ordinary status text to stdout.
+
+## Streamlit web interface
+
+The web interface uses the same Groq assistant and the same MCP stdio client. Dashboard data, charts, student tables, and chat-driven changes do not open SQLite directly from Streamlit.
+
+Start it from the project directory:
+
+```powershell
+streamlit run src/mcp_database_assistant/web_app.py
+```
+
+Open [http://localhost:8501](http://localhost:8501). The app has three pages:
+
+* `Dashboard` is an introductory page with live summary cards for students, teachers, departments, courses, and enrollments, plus the architecture and usage guidance.
+* `AI Chat` preserves the conversation in the Streamlit session and routes natural-language requests through Groq, the MCP client, and the MCP server. Chart requests render Plotly charts directly below the response.
+* `Students` shows live records with branch/year filters and marks sorting.
+
+Use `Refresh data` after a database change to retrieve the latest records. Delete requests require confirmation in the web chat before the MCP delete tool runs.
+
+## MCP Inspector
+
+The SDK CLI launches the Inspector and connects it to the server over stdio:
+
+```powershell
+mcp dev src/mcp_database_assistant/server.py
+```
+
+Open the URL printed by the command. In the Inspector, select a tool, enter its typed arguments, and call it. The Inspector discovers the original student tools plus the expanded college and chart-data tools.
+
+## MCP tools
+
+Read tools include the original student tools plus `list_teachers`, `get_teacher`, `list_departments`, `list_courses`, `list_enrollments`, `list_results`, `list_attendance`, `list_fees`, `search_library_books`, `list_library_transactions`, `list_timetable`, `get_database_summary`, and `get_chart_data`.
+
+Write tools: `add_student`, `update_student`, and `delete_student`. Inputs are validated; marks must be 0 to 100, years must be 1 to 8, IDs and limits must be positive, and names/branches cannot be empty. SQL is parameterized and there is no arbitrary `execute_sql` tool.
+
+Delete requests ask for confirmation after looking up the student. An update or delete reports whether the record existed and whether the database changed. All writes persist to `data/students.db`.
+
+## Dynamic charts in AI Chat
+
+Chart requests are handled by the same LLM/MCP loop as ordinary questions. Groq chooses `get_chart_data` with a validated dataset, chart type, optional title, filters, and limit. The MCP server executes one of the controlled, parameterized aggregate/read queries and returns rows. The web client validates the returned chart specification and renders Plotly; the model cannot provide Python or SQL code.
+
+Supported chart types are pie, donut, bar, horizontal bar, line, histogram, and scatter. Supported datasets cover students, teachers, departments, courses, enrollments, fees, attendance, and library categories. Examples:
+
+* `Create a pie chart of the average marks of each branch.`
+* `Show a horizontal bar chart of the top 10 students.`
+* `Plot the number of students in each academic year.`
+* `Show teacher salary distribution as a histogram.`
+* `Now show the same data as a bar chart.`
+
+Empty or unsuitable results are reported instead of being rendered as misleading charts.
+
+## Natural-language demonstrations
+
+| User request | MCP tool selected by the LLM |
+|---|---|
+| `Show all students.` | `list_students()` |
+| `Find students who scored above 80.` | `search_students(min_marks=80)` |
+| `What is the average marks?` | `get_average_marks()` |
+| `Show Computer Engineering students.` | `get_students_by_branch(branch="Computer Engineering")` |
+| `Add a student named Arjun from Computer Engineering with 87 marks.` | `add_student(...)` |
+| `Update Arjun's marks to 91.` | `search_students(name="Arjun")`, then `update_student(...)` |
+| `Delete Arjun.` | `search_students(name="Arjun")`, then confirmation and `delete_student(...)` |
+
+For name-based updates and deletes, the LLM first finds the matching record so the MCP write uses the actual student ID. If several records match, the LLM should ask the user to clarify.
+
+## Tests
+
+```powershell
+python -m pytest
+```
+
+The tests cover schema creation, legacy migration preservation, foreign-key-backed college tables, student operations, expanded MCP data access, chart aggregation, chart validation/rendering, persistent add/update/delete behavior, validation failures, and missing records.
+

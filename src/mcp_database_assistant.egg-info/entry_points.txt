@@ -1,0 +1,3 @@
+[console_scripts]
+mcp-database-assistant = mcp_database_assistant.app:main
+mcp-database-server = mcp_database_assistant.server:main
