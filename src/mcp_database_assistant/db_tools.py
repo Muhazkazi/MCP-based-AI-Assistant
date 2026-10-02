@@ -6,6 +6,8 @@ import sqlite3
 from typing import Any
 
 from .database import DEFAULT_DB_PATH, connect, rows_to_dicts, row_to_dict
+from .query_planner import execute_relational_query, sql_for_operation
+from .crud import delete_record, find_records, insert_record, table_schema, update_record
 
 
 def _text(value: str, field: str) -> str:
@@ -357,6 +359,18 @@ def get_database_summary(db_path=DEFAULT_DB_PATH) -> dict[str, int]:
     tables = ("students", "teachers", "departments", "courses", "enrollments")
     with connect(db_path) as db:
         return {f"{table}_count": db.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0] for table in tables}
+
+
+def query_college(operation: str, filters: dict[str, Any] | None = None,
+                  limit: int = 100, db_path=DEFAULT_DB_PATH) -> dict[str, Any]:
+    """Execute one named, read-only multi-table query plan."""
+    return execute_relational_query(operation, filters, limit, db_path)
+
+
+def get_sql_query(operation: str, filters: dict[str, Any] | None = None,
+                  limit: int = 100) -> dict[str, Any]:
+    """Return an approved parameterized SQL statement without executing it."""
+    return sql_for_operation(operation, filters, limit)
 
 
 CHART_DATASETS = {

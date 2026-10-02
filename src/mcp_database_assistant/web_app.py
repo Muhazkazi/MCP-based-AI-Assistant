@@ -60,9 +60,14 @@ async def _fetch_students() -> list[dict[str, Any]]:
         return students_from_result(await client.call_tool("list_students", {}))
 
 
-async def _delete_confirmed(student_id: int) -> dict[str, Any]:
+async def _delete_confirmed(pending: dict[str, Any], cascade_confirmed: bool = False) -> dict[str, Any]:
     async with DatabaseMCPClient() as client:
-        return await client.call_tool("delete_student", {"student_id": student_id})
+        if pending.get("delete_request"):
+            request = dict(pending["delete_request"])
+            request["confirmed"] = True
+            request["cascade_confirmed"] = cascade_confirmed
+            return await client.call_tool("delete_record", request)
+        return await client.call_tool("delete_student", {"student_id": pending["id"]})
 
 
 async def _chat_turn(history: list[dict[str, Any]], user_text: str) -> tuple[list[dict[str, Any]], str, dict[str, Any] | None, list[dict[str, Any]]]:
@@ -133,13 +138,26 @@ def _render_chat() -> None:
 
     pending = st.session_state.get("pending_delete")
     if pending:
-        st.warning(f"Delete {pending.get('name')} (ID {pending.get('id')})? This action cannot be undone.")
-        if st.button("Confirm deletion", type="primary"):
+        record = pending.get("record", pending)
+        label = record.get("name") or record.get("full_name") or f"{pending.get('table', 'record')} record"
+        identifier = record.get("id", pending.get("where", ""))
+        st.warning(f"Delete {label} (ID {identifier})? This action cannot be undone.")
+        cascade_required = bool(pending.get("cascade_required"))
+        button_label = "Confirm cascading deletion" if cascade_required else "Confirm deletion"
+        if cascade_required:
+            dependencies = pending.get("dependencies", [])
+            st.warning(f"This will also remove related rows: {dependencies}. Confirm this additional cascade explicitly.")
+        if st.button(button_label, type="primary"):
             try:
-                result = _run(_delete_confirmed(int(pending["id"])))
+                result = _run(_delete_confirmed(pending, cascade_required))
+                if result.get("requires_cascade_confirmation"):
+                    pending["cascade_required"] = True
+                    pending["dependencies"] = result.get("dependencies", [])
+                    st.session_state.pending_delete = pending
+                    st.rerun()
                 st.session_state.pending_delete = None
                 text = (
-                    f"Deleted {pending['name']} successfully."
+                    f"Deleted {label} successfully."
                     if result.get("changed")
                     else "The student was not deleted."
                 )

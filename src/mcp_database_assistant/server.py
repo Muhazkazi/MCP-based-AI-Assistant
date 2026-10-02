@@ -159,6 +159,56 @@ def get_database_summary() -> dict:
 
 
 @mcp.tool()
+def query_college(operation: str, filters: dict | None = None, limit: int = 100) -> dict:
+    """Run a safe named read-only relational query across multiple tables.
+
+    Supported operations include students_by_name_courses, students_by_course,
+    marks_by_student_name, course_marks_above, teacher_courses,
+    attendance_below, unpaid_fees_by_department, and overdue_books.
+    Filters are ordinary values such as name, course, min_marks, threshold, or teacher;
+    arbitrary SQL is never accepted.
+    """
+    return db_tools.query_college(operation, filters, limit)
+
+
+@mcp.tool()
+def get_sql_query(operation: str, filters: dict | None = None, limit: int = 100) -> dict:
+    """Return approved parameterized SQL for a named relational operation without executing it."""
+    return db_tools.get_sql_query(operation, filters, limit)
+
+
+@mcp.tool()
+def get_table_schema(table: str | None = None) -> dict:
+    """Return actual columns and SQLite metadata for one supported table or all tables."""
+    return db_tools.table_schema(table)
+
+
+@mcp.tool()
+def find_records(table: str, where: dict | None = None, limit: int = 50) -> dict:
+    """Find records in any supported table using exact, schema-validated field filters."""
+    return db_tools.find_records(table, where, limit)
+
+
+@mcp.tool()
+def insert_record(table: str, values: dict) -> dict:
+    """Insert one record into any supported table; required fields and foreign keys are validated."""
+    return db_tools.insert_record(table, values)
+
+
+@mcp.tool()
+def update_record(table: str, where: dict, values: dict) -> dict:
+    """Update one unambiguous record in any supported table. Primary keys and provenance metadata are protected."""
+    return db_tools.update_record(table, where, values)
+
+
+@mcp.tool()
+def delete_record(table: str, where: dict, confirmed: bool = False,
+                 cascade_confirmed: bool = False) -> dict:
+    """Delete exactly one record after explicit confirmation; dependent cascades require separate confirmation."""
+    return db_tools.delete_record(table, where, confirmed, cascade_confirmed)
+
+
+@mcp.tool()
 def get_chart_data(dataset: str, chart_type: str = "bar", title: str | None = None,
                   filters: dict | None = None, limit: int = 100) -> dict:
     """Return validated, read-only chart rows from a supported college dataset.

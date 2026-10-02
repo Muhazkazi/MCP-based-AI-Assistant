@@ -67,7 +67,7 @@ Copy `.env.example` to `.env` and set an API key:
 Copy-Item .env.example .env
 ```
 
-Set `GROQ_API_KEY` in `.env`. The default model is `openai/gpt-oss-20b`, which is currently available to this Groq account and supports tool use. You can override it with `GROQ_MODEL` when selecting another currently supported Groq tool-calling model. The Groq SDK base URL is `https://api.groq.com`; the SDK appends `/openai/v1/chat/completions`, producing the final endpoint `https://api.groq.com/openai/v1/chat/completions` exactly once.
+Set `GROQ_API_KEY` in `.env`. The default model is `openai/gpt-oss-120b`, a currently supported Groq model with tool use/function calling. You can override it with `GROQ_MODEL` when selecting another currently supported Groq tool-calling model. The Groq SDK base URL is `https://api.groq.com`; the SDK appends `/openai/v1/chat/completions`, producing the final endpoint `https://api.groq.com/openai/v1/chat/completions` exactly once.
 
 The normal application requires the LLM key. It does not silently fall back to a non-LLM database path.
 
@@ -137,9 +137,19 @@ Open the URL printed by the command. In the Inspector, select a tool, enter its 
 
 ## MCP tools
 
-Read tools include the original student tools plus `list_teachers`, `get_teacher`, `list_departments`, `list_courses`, `list_enrollments`, `list_results`, `list_attendance`, `list_fees`, `search_library_books`, `list_library_transactions`, `list_timetable`, `get_database_summary`, and `get_chart_data`.
+Read tools include the original student tools plus `list_teachers`, `get_teacher`, `list_departments`, `list_courses`, `list_enrollments`, `list_results`, `list_attendance`, `list_fees`, `search_library_books`, `list_library_transactions`, `list_timetable`, `get_database_summary`, `get_chart_data`, `query_college`, `get_sql_query`, `get_table_schema`, and `find_records`.
 
-Write tools: `add_student`, `update_student`, and `delete_student`. Inputs are validated; marks must be 0 to 100, years must be 1 to 8, IDs and limits must be positive, and names/branches cannot be empty. SQL is parameterized and there is no arbitrary `execute_sql` tool.
+Write tools: the backward-compatible `add_student`, `update_student`, and `delete_student`, plus schema-aware `insert_record`, `update_record`, and `delete_record`. Generic CRUD supports every operational table: `students`, `teachers`, `departments`, `courses`, `enrollments`, `exams`, `results`, `classrooms`, `timetable`, `attendance`, `fees`, `library_books`, and `library_transactions`. `get_table_schema` exposes the actual columns; `find_records` resolves exact identifiers. Inserts and updates validate columns and SQLite constraints, bind all values as parameters, return the saved record, and protect `id`, `provenance_id`, and `data_origin`. Ambiguous matches are rejected rather than updating every matching row.
+
+Examples:
+
+* `Add phone number 9876543210 for student ID 24.`
+* `Change Muhaz Kazi's gender to male and current semester to 7.`
+* `Update course ID 3 credits to 4.`
+* `Change the fee status for student ID 24 to paid.`
+* `Delete classroom ID 9.`
+
+Deletes require explicit confirmation. If related rows would be cascade-deleted, the tool reports those dependencies and requires separate cascade confirmation. Missing optional data remains NULL; the assistant never invents values to complete a record.
 
 Delete requests ask for confirmation after looking up the student. An update or delete reports whether the record existed and whether the database changed. All writes persist to `data/students.db`.
 
@@ -156,6 +166,32 @@ Supported chart types are pie, donut, bar, horizontal bar, line, histogram, and 
 * `Now show the same data as a bar chart.`
 
 Empty or unsuitable results are reported instead of being rendered as misleading charts.
+
+## Relational query planning and SQL requests
+
+`query_college` exposes named, validated read-only plans for multi-table questions. Plans use explicit joins across students, departments, enrollments, courses, results, exams, teachers, timetable, attendance, fees, and library transactions. User values are bound parameters, result limits are capped, and arbitrary SQL is rejected. Examples include:
+
+* `What courses have students named Zoya taken?` -> `students_by_name_courses`
+* `Which students are enrolled in Database Management Systems?` -> `students_by_course`
+* `Which students scored above 80 in Database Management Systems?` -> `course_marks_above`
+* `Which students have attendance below 75% in a course?` -> `attendance_below`
+
+When the user asks to write or show SQL, the assistant uses `get_sql_query`, which returns an approved parameterized statement without executing it. A request for an answer executes the corresponding read plan through MCP. Conversation history retains tool results and IDs so follow-ups such as `What courses have they taken?` can refer to the same students.
+
+## Authenticity and provenance
+
+The original database audit is in [DATA_QUALITY_REPORT.md](DATA_QUALITY_REPORT.md). The current operational rows are retained for compatibility but are labeled `synthetic_demo` in `data_provenance` and each operational table. They must not be represented as authentic college records. No private student data, marks, attendance, fee history, or invented faculty records were imported.
+
+Potential verified public sources for future institution-level imports are the [AISHE Higher Education Institution Directory](https://dashboard.aishe.gov.in/), the [AISHE official survey](https://aishe.gov.in/about-survey/), and the [AISHE college catalog on India’s OGD platform](https://up.data.gov.in/catalog/list-colleges-aishe-survey). The OGD platform describes its published datasets as licensed under the [Government Open Data License - India](https://data.gov.in/sites/default/files/Gazette_Notification_OGDL.pdf). Dataset-specific attribution and compatibility checks remain required; these sources do not justify fabricating student-level records.
+
+Before migration, create a recoverable copy of the database. The completed audit backup is `data/students.db.pre_quality_2026-10-02.bak`. Schema migration is in-place and does not seed data:
+
+```powershell
+Copy-Item data\students.db data\students.db.backup
+python -m mcp_database_assistant.database --migrate
+```
+
+Use `--seed-demo` only when a clearly labeled synthetic test database is desired; it is not run automatically and is not an authenticity import.
 
 ## Natural-language demonstrations
 

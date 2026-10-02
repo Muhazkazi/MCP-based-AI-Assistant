@@ -8,6 +8,7 @@ src/mcp_database_assistant/database.py
 src/mcp_database_assistant/db_tools.py
 src/mcp_database_assistant/llm.py
 src/mcp_database_assistant/mcp_client.py
+src/mcp_database_assistant/query_planner.py
 src/mcp_database_assistant/server.py
 src/mcp_database_assistant/web_app.py
 src/mcp_database_assistant.egg-info/PKG-INFO
@@ -19,4 +20,5 @@ src/mcp_database_assistant.egg-info/top_level.txt
 tests/test_analytics.py
 tests/test_charting.py
 tests/test_database.py
+tests/test_relational_queries.py
 tests/test_tools.py

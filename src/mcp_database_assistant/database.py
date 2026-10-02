@@ -35,6 +35,15 @@ def _create_tables(connection: sqlite3.Connection) -> None:
             office_location TEXT,
             established_year INTEGER CHECK (established_year BETWEEN 1800 AND 2100)
         );
+        CREATE TABLE IF NOT EXISTS data_provenance (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            source_name TEXT NOT NULL,
+            source_url TEXT,
+            license_or_terms TEXT,
+            retrieved_at TEXT NOT NULL,
+            data_origin TEXT NOT NULL CHECK (data_origin IN ('verified_public', 'synthetic_demo', 'unknown')),
+            notes TEXT
+        );
         CREATE TABLE IF NOT EXISTS students (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             name TEXT NOT NULL,
@@ -188,6 +197,12 @@ def migrate_schema(connection: sqlite3.Connection) -> None:
     connection.execute("PRAGMA foreign_keys = ON")
     _create_tables(connection)
     _migrate_legacy_students(connection)
+    for table in ("students", "teachers", "departments", "courses", "enrollments", "exams", "results", "attendance", "fees", "classrooms", "timetable", "library_books", "library_transactions"):
+        columns = _table_columns(connection, table)
+        if "provenance_id" not in columns:
+            connection.execute(f"ALTER TABLE {table} ADD COLUMN provenance_id INTEGER REFERENCES data_provenance(id)")
+        if "data_origin" not in columns:
+            connection.execute(f"ALTER TABLE {table} ADD COLUMN data_origin TEXT NOT NULL DEFAULT 'unknown' CHECK (data_origin IN ('verified_public', 'synthetic_demo', 'unknown'))")
     connection.executescript(
         """
         CREATE INDEX IF NOT EXISTS idx_students_department ON students(department_id);
@@ -201,8 +216,23 @@ def migrate_schema(connection: sqlite3.Connection) -> None:
         CREATE INDEX IF NOT EXISTS idx_attendance_student_course ON attendance(student_id, course_id);
         CREATE INDEX IF NOT EXISTS idx_fees_student_status ON fees(student_id, payment_status);
         CREATE INDEX IF NOT EXISTS idx_library_title ON library_books(title);
+        CREATE INDEX IF NOT EXISTS idx_students_origin ON students(data_origin);
+        CREATE INDEX IF NOT EXISTS idx_courses_origin ON courses(data_origin);
+        CREATE INDEX IF NOT EXISTS idx_provenance_origin ON data_provenance(data_origin);
         """
     )
+    connection.execute(
+        """INSERT INTO data_provenance
+           (source_name, source_url, license_or_terms, retrieved_at, data_origin, notes)
+           SELECT 'Existing local demonstration database', NULL,
+                  'Synthetic demonstration data; not a verified college dataset',
+                  '2026-10-02', 'synthetic_demo',
+                  'Rows were preserved during the data-quality migration and must not be presented as authentic records.'
+           WHERE NOT EXISTS (SELECT 1 FROM data_provenance WHERE data_origin = 'synthetic_demo')"""
+    )
+    synthetic_id = connection.execute("SELECT id FROM data_provenance WHERE data_origin = 'synthetic_demo' ORDER BY id LIMIT 1").fetchone()[0]
+    for table in ("students", "teachers", "departments", "courses", "enrollments", "exams", "results", "attendance", "fees", "classrooms", "timetable", "library_books", "library_transactions"):
+        connection.execute(f"UPDATE {table} SET provenance_id = COALESCE(provenance_id, ?), data_origin = CASE WHEN data_origin = 'unknown' THEN 'synthetic_demo' ELSE data_origin END", (synthetic_id,))
     connection.commit()
 
 
@@ -280,6 +310,9 @@ def seed_demo_data(db_path: str | Path = DEFAULT_DB_PATH) -> dict[str, int]:
         db.executemany("INSERT OR IGNORE INTO library_books (title, author, isbn, publisher, publication_year, available_copies, total_copies, category) VALUES (?, ?, ?, ?, ?, ?, ?, ?)", books)
         book_ids = [row[0] for row in db.execute("SELECT id FROM library_books ORDER BY id").fetchall()]
         db.executemany("INSERT INTO library_transactions (student_id, book_id, issue_date, due_date, return_date, transaction_status) SELECT ?, ?, ?, ?, ?, ? WHERE NOT EXISTS (SELECT 1 FROM library_transactions WHERE student_id = ? AND book_id = ?)", [(student_ids[index % len(student_ids)], book_ids[index % len(book_ids)], "2024-08-01", "2024-08-15", "2024-08-12" if index % 3 else None, "returned" if index % 3 else "issued", student_ids[index % len(student_ids)], book_ids[index % len(book_ids)]) for index in range(50)])
+        synthetic_id = db.execute("SELECT id FROM data_provenance WHERE data_origin = 'synthetic_demo' ORDER BY id LIMIT 1").fetchone()[0]
+        for table in ("students", "teachers", "departments", "courses", "enrollments", "exams", "results", "attendance", "fees", "classrooms", "timetable", "library_books", "library_transactions"):
+            db.execute(f"UPDATE {table} SET provenance_id = COALESCE(provenance_id, ?), data_origin = CASE WHEN data_origin = 'unknown' THEN 'synthetic_demo' ELSE data_origin END", (synthetic_id,))
         db.commit()
         return {table: db.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0] for table in ("students", "teachers", "departments", "courses", "enrollments")}
 
