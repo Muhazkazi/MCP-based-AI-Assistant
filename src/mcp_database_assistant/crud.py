@@ -7,6 +7,11 @@ parameters. The LLM never supplies SQL text.
 from __future__ import annotations
 
 import sqlite3
+import hashlib
+import json
+import time
+from datetime import datetime, timezone
+from uuid import uuid4
 from typing import Any
 
 from .database import DEFAULT_DB_PATH, connect, row_to_dict, rows_to_dicts
@@ -17,6 +22,9 @@ SUPPORTED_TABLES = (
     "library_books", "library_transactions",
 )
 PROTECTED_COLUMNS = {"id", "provenance_id", "data_origin"}
+PENDING_DELETIONS: dict[str, dict[str, Any]] = {}
+DELETE_TTL_SECONDS = 300
+PENDING_STORE = DEFAULT_DB_PATH.with_name(".pending_deletions.json")
 
 
 def _table(table: str) -> str:
@@ -161,6 +169,127 @@ def delete_record(table: str, where: dict[str, Any], confirmed: bool = False,
             db.rollback()
             raise ValueError(f"Delete rejected because related records remain: {exc}") from exc
     return {"success": remaining == 0, "found": True, "changed": remaining == 0, "table": table, "record_id": record_id, "deleted_record": row_to_dict(matches[0]), "dependencies": dependencies}
+
+
+def _fingerprint(record: dict[str, Any]) -> str:
+    payload = json.dumps(record, sort_keys=True, default=str, separators=(",", ":"))
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def _expire_pending() -> None:
+    global PENDING_DELETIONS
+    if PENDING_STORE.exists():
+        try:
+            PENDING_DELETIONS = json.loads(PENDING_STORE.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            PENDING_DELETIONS = {}
+    now = time.time()
+    changed = False
+    for token, request in list(PENDING_DELETIONS.items()):
+        if request["expires_at"] <= now:
+            PENDING_DELETIONS.pop(token, None)
+            changed = True
+    if changed:
+        _save_pending()
+
+
+def _save_pending() -> None:
+    try:
+        PENDING_STORE.parent.mkdir(parents=True, exist_ok=True)
+        PENDING_STORE.write_text(json.dumps(PENDING_DELETIONS), encoding="utf-8")
+    except OSError:
+        # The in-process map remains authoritative when a read-only deployment
+        # cannot create the optional sidecar.
+        pass
+
+
+def request_delete(table: str, where: dict[str, Any], session_id: str,
+                   db_path=DEFAULT_DB_PATH) -> dict[str, Any]:
+    """Fetch exactly one record and create a five-minute, session-bound deletion request."""
+    if not isinstance(session_id, str) or not session_id.strip():
+        raise ValueError("session_id is required")
+    _expire_pending()
+    found = find_records(table, where, limit=2, db_path=db_path)
+    if found["count"] == 0:
+        return {"success": False, "found": False, "message": "No matching record."}
+    if found["count"] != 1:
+        return {"success": False, "found": True, "ambiguous": True, "count": found["count"], "message": "Deletion requires one exact record."}
+    record = found["records"][0]
+    with connect(db_path) as db:
+        dependencies = _dependent_counts(db, table, record.get("id"))
+    token = uuid4().hex
+    expires_at = time.time() + DELETE_TTL_SECONDS
+    PENDING_DELETIONS[token] = {
+        "session_id": session_id,
+        "table": table,
+        "where": dict(where),
+        "record": record,
+        "fingerprint": _fingerprint(record),
+        "dependencies": dependencies,
+        "expires_at": expires_at,
+    }
+    _save_pending()
+    return {
+        "success": True,
+        "pending": True,
+        "confirmation_id": token,
+        "expires_at": datetime.fromtimestamp(expires_at, timezone.utc).isoformat(),
+        "table": table,
+        "record": record,
+        "dependencies": dependencies,
+        "requires_cascade_confirmation": bool(dependencies),
+        "message": "Record fetched. No deletion has occurred. Explicit confirmation is required.",
+    }
+
+
+def confirm_delete(confirmation_id: str, session_id: str, cascade_confirmed: bool = False,
+                   db_path=DEFAULT_DB_PATH) -> dict[str, Any]:
+    """Confirm one pending request, revalidate its record, then delete exactly once."""
+    _expire_pending()
+    request = PENDING_DELETIONS.get(confirmation_id)
+    if not request:
+        return {"success": False, "changed": False, "message": "Confirmation is expired, cancelled, completed, or unknown."}
+    if request["session_id"] != session_id:
+        return {"success": False, "changed": False, "message": "This confirmation belongs to another session."}
+    if request["dependencies"] and not cascade_confirmed:
+        return {"success": False, "changed": False, "requires_cascade_confirmation": True, "dependencies": request["dependencies"], "message": "Related records exist. A separate cascade confirmation is required."}
+    table = request["table"]
+    where = request["where"]
+    with connect(db_path) as db:
+        schema = _columns(db, table)
+        clause, params = _where(schema, where)
+        current = db.execute(f'SELECT * FROM "{table}" WHERE {clause}', params).fetchall()
+        if len(current) != 1 or _fingerprint(dict(current[0])) != request["fingerprint"]:
+            PENDING_DELETIONS.pop(confirmation_id, None)
+            _save_pending()
+            return {"success": False, "changed": False, "stale": True, "message": "The record changed or no longer exists; confirmation was invalidated."}
+        try:
+            db.execute(f'DELETE FROM "{table}" WHERE {clause}', params)
+            remaining = db.execute(f'SELECT COUNT(*) FROM "{table}" WHERE {clause}', params).fetchone()[0]
+            if remaining:
+                db.rollback()
+                return {"success": False, "changed": False, "message": "The record could not be verified as deleted."}
+            db.commit()
+        except sqlite3.IntegrityError as exc:
+            db.rollback()
+            PENDING_DELETIONS.pop(confirmation_id, None)
+            _save_pending()
+            return {"success": False, "changed": False, "message": f"Delete rejected because related records remain: {exc}"}
+    PENDING_DELETIONS.pop(confirmation_id, None)
+    _save_pending()
+    return {"success": True, "changed": True, "table": table, "record": request["record"], "message": "Deletion verified."}
+
+
+def cancel_delete(confirmation_id: str, session_id: str) -> dict[str, Any]:
+    _expire_pending()
+    request = PENDING_DELETIONS.get(confirmation_id)
+    if not request:
+        return {"success": False, "cancelled": False, "message": "Confirmation is expired, cancelled, completed, or unknown."}
+    if request["session_id"] != session_id:
+        return {"success": False, "cancelled": False, "message": "This confirmation belongs to another session."}
+    PENDING_DELETIONS.pop(confirmation_id, None)
+    _save_pending()
+    return {"success": True, "cancelled": True, "message": "Deletion cancelled. The record was retained."}
 
 
 def table_schema(table: str | None = None, db_path=DEFAULT_DB_PATH) -> dict[str, Any]:

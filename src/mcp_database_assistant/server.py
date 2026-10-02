@@ -80,8 +80,8 @@ def update_student(student_id: int, name: str | None = None, branch: str | None 
 
 @mcp.tool()
 def delete_student(student_id: int) -> dict:
-    """Delete one student by ID and report whether a database row was changed."""
-    return db_tools.delete_student(student_id)
+    """Legacy delete endpoint. Direct deletion is disabled; use request_delete then confirm_delete."""
+    return {"success": False, "changed": False, "requires_confirmation": True, "message": "Direct deletion is disabled. Use request_delete, then confirm_delete."}
 
 
 @mcp.tool()
@@ -204,8 +204,26 @@ def update_record(table: str, where: dict, values: dict) -> dict:
 @mcp.tool()
 def delete_record(table: str, where: dict, confirmed: bool = False,
                  cascade_confirmed: bool = False) -> dict:
-    """Delete exactly one record after explicit confirmation; dependent cascades require separate confirmation."""
-    return db_tools.delete_record(table, where, confirmed, cascade_confirmed)
+    """Legacy delete endpoint. Direct deletion is disabled; use request_delete then confirm_delete."""
+    return {"success": False, "changed": False, "requires_confirmation": True, "message": "Direct deletion is disabled. Use request_delete, then confirm_delete."}
+
+
+@mcp.tool()
+def request_delete(table: str, where: dict, session_id: str = "") -> dict:
+    """Fetch exactly one record and create a five-minute pending deletion; this never changes SQLite."""
+    return db_tools.request_delete(table, where, session_id)
+
+
+@mcp.tool()
+def confirm_delete(confirmation_id: str, session_id: str, cascade_confirmed: bool = False) -> dict:
+    """Execute one still-valid pending deletion for its owning session after explicit confirmation."""
+    return db_tools.confirm_delete(confirmation_id, session_id, cascade_confirmed)
+
+
+@mcp.tool()
+def cancel_delete(confirmation_id: str, session_id: str) -> dict:
+    """Cancel one pending deletion request without modifying the record."""
+    return db_tools.cancel_delete(confirmation_id, session_id)
 
 
 @mcp.tool()

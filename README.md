@@ -151,6 +151,16 @@ Examples:
 
 Deletes require explicit confirmation. If related rows would be cascade-deleted, the tool reports those dependencies and requires separate cascade confirmation. Missing optional data remains NULL; the assistant never invents values to complete a record.
 
+## Two-step deletion safety
+
+Deletion is a request/confirm/cancel workflow:
+
+1. `request_delete` retrieves exactly one record through MCP, returns its actual fields, creates a unique five-minute confirmation ID, and does not execute `DELETE`.
+2. The terminal accepts only a clear affirmative phrase such as `yes`, `confirm deletion`, or `proceed with deletion`; Streamlit uses the confirmation button tied to that exact ID. The MCP server revalidates the session, token, expiry, record fingerprint, and foreign-key dependencies immediately before deleting.
+3. `cancel_delete` invalidates the request without changing the record. Reuse, expiry, wrong-session confirmation, record changes, and ambiguous matches are rejected.
+
+Pending requests are held in a short-lived sidecar file rather than SQLite so the operational database is unchanged during step one. The request is scoped to the current application session; a new terminal or Streamlit session cannot confirm it. Related records require an additional explicit cascade confirmation and are never silently removed.
+
 Delete requests ask for confirmation after looking up the student. An update or delete reports whether the record existed and whether the database changed. All writes persist to `data/students.db`.
 
 ## Dynamic charts in AI Chat

@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import re
+from uuid import uuid4
 from collections.abc import Awaitable, Callable
 from typing import Any
 
@@ -44,7 +45,7 @@ def _tools_for_request(mcp_tools: list[Any], request: str) -> list[Any]:
     elif any(word in text for word in ("course", "enroll", "marks", "result", "attendance", "fee", "library", "teacher", "department")):
         selected = {"query_college", "search_students", "list_courses", "list_teachers", "list_departments"}
     elif any(word in text for word in ("add", "update", "delete", "remove")):
-        selected = {"get_table_schema", "find_records", "insert_record", "update_record", "delete_record", "search_students", "get_student", "add_student", "update_student", "delete_student"}
+        selected = {"get_table_schema", "find_records", "insert_record", "update_record", "request_delete", "search_students", "get_student", "add_student", "update_student"}
     elif any(word in text for word in ("how many", "count", "number of")):
         selected = {"get_student_count", "search_students", "get_database_summary"}
     else:
@@ -65,6 +66,8 @@ class LLMDatabaseAssistant:
         self.model = os.getenv("GROQ_MODEL", "openai/gpt-oss-120b")
         self.last_charts: list[dict[str, Any]] = []
         self.last_sql: dict[str, Any] | None = None
+        self.session_id = uuid4().hex
+        self.pending_deletion: dict[str, Any] | None = None
         self.messages: list[dict[str, Any]] = [
             {
                 "role": "system",
@@ -88,6 +91,8 @@ class LLMDatabaseAssistant:
                     "SQL, call get_sql_query and present its returned parameterized SQL in a code block; do not execute it."
                     " For modifications, inspect get_table_schema when needed, use insert_record/update_record/delete_record "
                     "for all tables, and use find_records to resolve identifiers. Never update an ambiguous match. "
+                    "For deletion, call request_delete only; never call or simulate confirmation yourself. The application "
+                    "will separately confirm or cancel the returned confirmation request. "
                     "Never modify id, provenance_id, or data_origin."
                 ),
             }
@@ -96,6 +101,29 @@ class LLMDatabaseAssistant:
     async def respond(self, user_text: str) -> str:
         self.last_charts = []
         self.last_sql = None
+        normalized = user_text.strip().lower()
+        affirmative = bool(re.fullmatch(r"(?:yes|y|yes,? delete it|confirm(?: deletion)?|i am sure|proceed(?: with deletion)?)", normalized))
+        cancellation = bool(re.fullmatch(r"(?:no|n|cancel|keep the record|do not delete|don't delete)", normalized))
+        if self.pending_deletion and affirmative:
+            result = await self.client.call_tool("confirm_delete", {
+                "confirmation_id": self.pending_deletion["confirmation_id"],
+                "session_id": self.session_id,
+                "cascade_confirmed": bool(self.pending_deletion.get("cascade_confirmation_requested")),
+            })
+            if result.get("requires_cascade_confirmation"):
+                self.pending_deletion["cascade_confirmation_requested"] = True
+                return "Related records exist. Please explicitly confirm the additional cascade deletion."
+            self.pending_deletion = None
+            return result.get("message", "Deletion was not completed.")
+        if self.pending_deletion and cancellation:
+            result = await self.client.call_tool("cancel_delete", {
+                "confirmation_id": self.pending_deletion["confirmation_id"],
+                "session_id": self.session_id,
+            })
+            self.pending_deletion = None
+            return result.get("message", "Deletion cancelled.")
+        if self.pending_deletion and not any(word in normalized for word in ("delete", "remove")):
+            return "A deletion is pending for the displayed record. Reply with a clear confirmation or cancellation."
         self.messages.append({"role": "user", "content": user_text})
         requested_chart_type = None
         chart_type_patterns = (
@@ -133,26 +161,11 @@ class LLMDatabaseAssistant:
                 arguments = json.loads(tool_call.function.arguments or "{}")
                 if tool_call.function.name == "get_chart_data" and requested_chart_type:
                     arguments["chart_type"] = requested_chart_type
-                if tool_call.function.name == "delete_student":
-                    lookup = await self.client.call_tool("get_student", {"student_id": arguments["student_id"]})
-                    student = lookup.get("student")
-                    if not lookup.get("found"):
-                        tool_result = {"success": False, "found": False, "changed": False}
-                    elif not await self.confirm_delete(student):
-                        tool_result = {"success": False, "found": True, "changed": False, "cancelled": True}
-                    else:
-                        tool_result = await self.client.call_tool(tool_call.function.name, arguments)
-                elif tool_call.function.name == "delete_record":
-                    preview_args = {"table": arguments["table"], "where": arguments["where"], "limit": 2}
-                    preview = await self.client.call_tool("find_records", preview_args)
-                    records = preview.get("records", [])
-                    if len(records) != 1:
-                        tool_result = {"success": False, "found": bool(records), "ambiguous": len(records) > 1, "message": "Deletion requires one exact record."}
-                    elif not await self.confirm_delete({"table": arguments["table"], "where": arguments["where"], "record": records[0], "delete_request": arguments}):
-                        tool_result = {"success": False, "found": True, "cancelled": True, "requires_confirmation": True, "record": records[0], "delete_request": arguments}
-                    else:
-                        arguments["confirmed"] = True
-                        tool_result = await self.client.call_tool(tool_call.function.name, arguments)
+                if tool_call.function.name == "request_delete":
+                    arguments["session_id"] = self.session_id
+                    tool_result = await self.client.call_tool("request_delete", arguments)
+                    if tool_result.get("pending"):
+                        self.pending_deletion = tool_result
                 else:
                     tool_result = await self.client.call_tool(tool_call.function.name, arguments)
                 if tool_call.function.name == "get_chart_data":
@@ -164,5 +177,9 @@ class LLMDatabaseAssistant:
                     "tool_call_id": tool_call.id,
                     "content": json.dumps(tool_result, default=str),
                 })
+                if tool_call.function.name == "request_delete" and tool_result.get("pending"):
+                    record = tool_result.get("record", {})
+                    label = record.get("name") or record.get("full_name") or f"{tool_result.get('table')} record"
+                    return f"I found {label}: {json.dumps(record, default=str)}. No deletion has occurred. Please explicitly confirm or cancel this deletion."
         return "I could not complete that request within the tool-call limit."
 

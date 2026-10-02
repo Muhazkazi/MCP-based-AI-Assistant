@@ -62,12 +62,19 @@ async def _fetch_students() -> list[dict[str, Any]]:
 
 async def _delete_confirmed(pending: dict[str, Any], cascade_confirmed: bool = False) -> dict[str, Any]:
     async with DatabaseMCPClient() as client:
-        if pending.get("delete_request"):
-            request = dict(pending["delete_request"])
-            request["confirmed"] = True
-            request["cascade_confirmed"] = cascade_confirmed
-            return await client.call_tool("delete_record", request)
-        return await client.call_tool("delete_student", {"student_id": pending["id"]})
+        return await client.call_tool("confirm_delete", {
+            "confirmation_id": pending["confirmation_id"],
+            "session_id": pending["session_id"],
+            "cascade_confirmed": cascade_confirmed,
+        })
+
+
+async def _cancel_delete(pending: dict[str, Any]) -> dict[str, Any]:
+    async with DatabaseMCPClient() as client:
+        return await client.call_tool("cancel_delete", {
+            "confirmation_id": pending["confirmation_id"],
+            "session_id": pending["session_id"],
+        })
 
 
 async def _chat_turn(history: list[dict[str, Any]], user_text: str) -> tuple[list[dict[str, Any]], str, dict[str, Any] | None, list[dict[str, Any]]]:
@@ -83,7 +90,11 @@ async def _chat_turn(history: list[dict[str, Any]], user_text: str) -> tuple[lis
         if history:
             assistant.messages = history
         answer = await assistant.respond(user_text)
-        return assistant.messages, answer, pending_delete, assistant.last_charts
+    pending_delete = assistant.pending_deletion
+    if pending_delete:
+        pending_delete = dict(pending_delete)
+        pending_delete["session_id"] = assistant.session_id
+    return assistant.messages, answer, pending_delete, assistant.last_charts
 
 
 def _load_dashboard() -> None:
@@ -147,7 +158,8 @@ def _render_chat() -> None:
         if cascade_required:
             dependencies = pending.get("dependencies", [])
             st.warning(f"This will also remove related rows: {dependencies}. Confirm this additional cascade explicitly.")
-        if st.button(button_label, type="primary"):
+        action_columns = st.columns(2)
+        if action_columns[0].button(button_label, type="primary"):
             try:
                 result = _run(_delete_confirmed(pending, cascade_required))
                 if result.get("requires_cascade_confirmation"):
@@ -164,7 +176,15 @@ def _render_chat() -> None:
                 st.session_state.chat_display.append({"role": "assistant", "content": text})
                 st.rerun()
             except Exception as exc:
-                st.error(f"Could not delete the student: {_friendly_error(exc)}")
+                st.error(f"Could not delete the record: {_friendly_error(exc)}")
+        if action_columns[1].button("Cancel"):
+            try:
+                _run(_cancel_delete(pending))
+                st.session_state.pending_delete = None
+                st.session_state.chat_display.append({"role": "assistant", "content": "Deletion cancelled. The record was retained."})
+                st.rerun()
+            except Exception as exc:
+                st.error(f"Could not cancel the deletion: {_friendly_error(exc)}")
 
     user_text = st.chat_input("Ask about students or request a database operation")
     if user_text:
