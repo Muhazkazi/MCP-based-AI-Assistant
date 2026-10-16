@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import sys
 import json
+import os
 from pathlib import Path
 from typing import Any
 
@@ -16,9 +17,20 @@ class DatabaseMCPClient:
 
     def __init__(self) -> None:
         project_root = Path(__file__).resolve().parents[2]
+        # Streamlit Community Cloud runs the app from the source checkout. The
+        # app can import this package because its entry-point directory is on
+        # sys.path, but the child started from the repository root cannot
+        # resolve a src-layout package unless we pass that path explicitly.
+        source_root = project_root / "src"
+        child_env = os.environ.copy()
+        existing_pythonpath = child_env.get("PYTHONPATH")
+        child_env["PYTHONPATH"] = os.pathsep.join(
+            str(path) for path in (source_root, existing_pythonpath) if path
+        )
         self.server = StdioServerParameters(
             command=sys.executable,
             args=["-m", "mcp_database_assistant.server"],
+            env=child_env,
             cwd=project_root,
         )
         self.client: Client | None = None
