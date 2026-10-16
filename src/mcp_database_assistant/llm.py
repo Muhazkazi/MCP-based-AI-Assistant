@@ -47,7 +47,10 @@ def _tools_for_request(mcp_tools: list[Any], request: str) -> list[Any]:
     elif any(word in text for word in ("add", "update", "delete", "remove")):
         selected = {"get_table_schema", "find_records", "insert_record", "update_record", "request_delete", "search_students", "get_student", "add_student", "update_student"}
     elif any(word in text for word in ("how many", "count", "number of")):
-        selected = {"get_student_count", "search_students", "get_database_summary"}
+        # Total-count tools cannot answer grouped questions such as "how many
+        # students are in each branch". Include list_students so the model can
+        # calculate the grouping from MCP-returned rows.
+        selected = {"list_students", "get_student_count", "search_students", "get_database_summary"}
     else:
         selected = {"list_students", "search_students", "get_student_count", "get_average_marks", "get_top_students"}
     return [tool for tool in mcp_tools if tool.name in selected & names]
@@ -82,7 +85,9 @@ class LLMDatabaseAssistant:
                     "students_average_marks_by_branch, student_marks_distribution, top_students_marks, "
                     "teachers_by_department, teacher_salary_distribution, courses_by_department, "
                     "course_enrollment, enrollments_by_year, fees_by_status, books_by_category, "
-                    "attendance_by_status, and student_marks_by_year."
+                    "attendance_by_status, and student_marks_by_year. For grouped counts such as "
+                    "students in each branch, use list_students and calculate the groups from the "
+                    "returned rows; get_student_count is only for one total."
                     " For questions requiring joins, use query_college with a named operation instead of isolated table calls. "
                     "Supported relational operations include students_by_name_courses, students_by_course, "
                     "marks_by_student_name, course_marks_above, teacher_courses, attendance_below, "
