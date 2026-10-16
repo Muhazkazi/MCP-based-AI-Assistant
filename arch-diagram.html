@@ -1,0 +1,171 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>MCP Database Assistant - Runtime Architecture</title>
+    <style>
+        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; margin: 20px; max-width: 1400px; }
+        h1 { color: #007acc; }
+        h2 { border-bottom: 2px solid #007acc; padding-bottom: 5px; }
+        h3 { margin-top: 0; }
+        .component {
+            border: 2px solid #007acc;
+            border-radius: 8px;
+            padding: 12px;
+            margin: 8px;
+            width: 185px;
+            display: inline-block;
+            vertical-align: top;
+            font-size: 12px;
+            text-align: center;
+        }
+        .component h4 { margin: 0 0 8px 0; color: #007acc; font-size: 12px; }
+        .component small { display: block; color: #666; font-size: 10px; }
+        .arrow { display: inline-block; width: 30px; text-align: center; font-size: 24px; font-weight: bold; color: #007acc; margin: 0 8px; }
+        .trust-boundary {
+            border: 3px dashed #ff6600;
+            margin: 20px 0;
+            padding: 15px;
+            background-color: #fff8f2;
+            border-radius: 8px;
+        }
+        .primary-path .component { background-color: #e6f7ff; }
+        .primary-path h4 { color: #004080; }
+        .external-dep {
+            border-color: #28a745;
+            background-color: #f8fff9;
+        }
+        .external-dep h4 { color: #1e7e34; }
+        .card {
+            border: 1px solid #ddd;
+            border-radius: 6px;
+            padding: 12px;
+            margin: 12px 0;
+            background-color: #f9f9f9;
+        }
+        code { background: #e8e8e8; padding: 1px 5px; border-radius: 3px; font-family: "Consolas", monospace; }
+        ul { margin: 0; padding-left: 20px; }
+        li { margin: 4px 0; }
+        .legend { display: flex; gap: 20px; flex-wrap: wrap; margin: 15px 0; }
+        .legend-item { display: flex; align-items: center; gap: 6px; font-size: 11px; }
+        .legend-box { width: 20px; height: 20px; border-radius: 4px; }
+        .path { background-color: #e6f7ff; border: 2px solid #007acc; }
+        .trust { background-color: #fff8f2; border: 3px dashed #ff6600; }
+        .external { background-color: #f8fff9; border: 2px solid #28a745; }
+        .secondary { background-color: #f3f3f3; border: 1px solid #bbb; }
+    </style>
+</head>
+<body>
+    <h1>MCP Database Assistant — Runtime Architecture</h1>
+
+    <div class="legend">
+        <div class="legend-item"><div class="legend-box path"></div> Primary path component</div>
+        <div class="legend-item"><div class="legend-box trust"></div> Trust boundary</div>
+        <div class="legend-item"><div class="legend-box external"></div> External dependency</div>
+        <div class="legend-item"><div class="legend-box secondary"></div> Secondary detail (card)</div>
+    </div>
+
+    <div class="trust-boundary">
+        <h2 style="border: none; padding-bottom: 0; color: #ff6600; font-size: 16px;">
+            🛡 Trust Boundary 1 — LLM is sandboxed from the database
+        </h2>
+        <p style="margin: 0 0 0 20px; padding: 0; font-size: 12px;">
+            The LLM never opens SQLite or runs SQL. It only receives safe tool schemas and tool results from the MCP server. The MCP server is the <em>only process</em> that imports the SQLite layer (see <code>server.py</code> top comment and <code>mcp_client.py</code> docstring).
+        </p>
+    </div>
+
+    <h2>Core Components (11 total) — Primary Path</h2>
+
+    <div class="primary-path">
+        <div class="component">
+            <h4>User</h4>
+            <small>Human via terminal or browser</small>
+        </div>
+        <span class="arrow">→</span>
+        <div class="component">
+            <h4>Terminal UI</h4>
+            <small><code>app.py</code><br>async chat loop</small>
+        </div>
+        <span class="arrow">→</span>
+        <div class="component">
+            <h4>Streamlit Web UI</h4>
+            <small><code>web_app.py</code><br>3 pages (Dashboard, AI Chat, Students)</small>
+        </div>
+        <span class="arrow">→</span>
+        <div class="component">
+            <h4>LLM Orchestrator</h4>
+            <small><code>llm.py</code><br>tool-calling loop + 2-step delete workflow</small>
+        </div>
+        <span class="arrow">→</span>
+        <div class="component">
+            <h4>MCP Client</h4>
+            <small><code>mcp_client.py</code><br>stdio transport to server subprocess</small>
+        </div>
+        <span class="arrow">→</span>
+        <div class="component">
+            <h4>MCP Server</h4>
+            <small><code>server.py</code><br><code>@mcp.tool()</code> definitions</small>
+        </div>
+        <span class="arrow">→</span>
+        <div class="component">
+            <h4>DB Tools</h4>
+            <small><code>db_tools.py</code><br>validated scalar & aggregate ops</small>
+        </div>
+        <span class="arrow">→</span>
+        <div class="component">
+            <h4>Query Planner</h4>
+            <small><code>query_planner.py</code><br>named read-only plans, params bound</small>
+        </div>
+        <span class="arrow">→</span>
+        <div class="component">
+            <h4>CRUD Engine</h4>
+            <small><code>crud.py</code><br>schema-aware write flow with delete hold</small>
+        </div>
+        <span class="arrow">→</span>
+        <div class="component">
+            <h4>SQLite DB</h4>
+            <small><code>data/students.db</code><br>13 tables + provenance tracking</small>
+        </div>
+    </div>
+
+    <div class="card">
+        <h3>📍 Primary Path (single through-line)</h3>
+        <p style="margin: 0; font-family: Consolas, monospace; font-size: 11px;">
+            User → Terminal UI (<code>app.py</code>) / Streamlit UI (<code>web_app.py</code>) → LLM Orchestrator (<code>llm.py</code>) → MCP Client (<code>mcp_client.py</code>) → MCP Server (<code>server.py</code>) → DB Tools (<code>db_tools.py</code>) → Query Planner (<code>query_planner.py</code>) / CRUD Engine (<code>crud.py</code>) → SQLite Database (<code>data/students.db</code>) → response back along same path
+        </p>
+    </div>
+
+    <div class="trust-boundary">
+        <h2 style="border: none; padding-bottom: 0; color: #ff6600; font-size: 16px;">
+            🛡 Trust Boundary 2 — Write safety: delete requires explicit confirmation
+        </h2>
+        <p style="margin: 0 0 0 20px; padding: 0; font-size: 12px;">
+            Deletion is a two-step request/confirm/cancel workflow held in a <em>sidecar file</em> (<code>.pending_deletions.json</code>), not SQLite. Each request is session-scoped, expires in 5 minutes, is validated (record fingerprint, foreign-key dependencies, cascade confirmation), and the operational database is never changed until step 2 succeeds. Direct <code>delete_student</code> is disabled (<code>server.py:83</code>).
+        </p>
+    </div>
+
+    <h2>External Dependencies</h2>
+    <div class="external-dep" style="display: inline-block; width: 210px; vertical-align: top; margin: 8px; border: 2px solid #28a745; border-radius: 8px; padding: 12px; font-size: 12px;">
+        <h4 style="color: #1e7e34;">Groq LLM API</h4>
+        <small>OpenAI-compatible endpoint: <code>https://api.groq.com</code><br>GROQ_API_KEY + GROQ_MODEL in <code>.env</code></small>
+    </div>
+    <div class="external-dep" style="display: inline-block; width: 210px; vertical-align: top; margin: 8px; border: 2px solid #28a745; border-radius: 8px; padding: 12px; font-size: 12px;">
+        <h4 style="color: #1e7e34;">Python Runtime / Stdio</h4>
+        <small>Server runs as a separate subprocess spawned via Python stdio (<code>mcp_client.py</code>)</small>
+    </div>
+    <div class="external-dep" style="display: inline-block; width: 210px; vertical-align: top; margin: 8px; border: 2px solid #28a745; border-radius: 8px; padding: 12px; font-size: 12px;">
+        <h4 style="color: #1e7e34;">Python Packages</h4>
+        <small><code>mcp[cli] 2.2+</code>, <code>groq 1.7+</code>, <code>python-dotenv</code>, <code>streamlit</code>, <code>plotly</code> (see <code>pyproject.toml</code>)</small>
+    </div>
+
+    <div class="card">
+        <h3>Secondary Details (cards, not edges)</h3>
+        <ul>
+            <li><strong>Analytics</strong> (<code>analytics.py</code>): pure helper functions (branch counts, average marks, distributions) for chart data — no I/O.</li>
+            <li><strong>Charting</strong> (<code>charting.py</code>): validates the MCP chart payload (type, row limit ≤ 500, scatter requires X+Y) and renders Plotly figures; supports pie, donut, bar, horizontal_bar, line, histogram, scatter.</li>
+            <li><strong>Data Provenance</strong> (<code>database.py</code>): every table carries <code>provenance_id</code> + <code>data_origin</code> ('verified_public' / 'synthetic_demo' / 'unknown'); demo rows are labeled <code>synthetic_demo</code>.</li>
+            <li><strong>MCP Inspector</strong>: <code>mcp dev src/mcp_database_assistant/server.py</code> — inspect tool schemas and call them directly.</li>
+            <li><strong>Tests</strong> (<code>tests/</code>): schema creation, legacy migration preservation, FK-backed college tables, CRUD, relational queries, charting.</li>
+        </ul>
+    </div>
+</body>
+</html>
